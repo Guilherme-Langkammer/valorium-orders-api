@@ -1,6 +1,7 @@
 # Valorium Orders API
 
 [![Backend CI](https://github.com/Guilherme-Langkammer/valorium-orders-api/actions/workflows/tests.yml/badge.svg)](https://github.com/Guilherme-Langkammer/valorium-orders-api/actions/workflows/tests.yml)
+[![Docker CI](https://github.com/Guilherme-Langkammer/valorium-orders-api/actions/workflows/docker.yml/badge.svg)](https://github.com/Guilherme-Langkammer/valorium-orders-api/actions/workflows/docker.yml)
 
 A RESTful order management API built with Python, FastAPI, SQLAlchemy, and Alembic.
 
@@ -250,6 +251,23 @@ The current test suite covers:
 
 Order tests use an isolated in-memory SQLite database.
 
+## Architecture Overview
+
+```mermaid
+flowchart TD
+    A[HTTP Client] --> B[FastAPI Application]
+    B --> C[API Routes]
+    C --> D[Pydantic Schemas]
+    C --> E[SQLAlchemy ORM]
+    E --> F[(SQLite Database)]
+    G[Alembic Migrations] --> F
+    H[Docker Compose] --> B
+    H --> I[Persistent Docker Volume]
+    F -. Docker deployment .-> I
+```
+
+The API separates HTTP routing, data validation, ORM models, and database configuration. Docker Compose runs database migrations before starting the application and stores SQLite data in a named volume.
+
 ## Architecture Notes
 
 The project separates:
@@ -271,7 +289,7 @@ Current functionality focuses on order management, database migrations, and auto
 
 Authentication, authorization, and production deployment are not implemented in the current version.
 
-Dockerfile and Docker Compose configurations are included, but a complete container runtime validation is still pending.
+Docker and Docker Compose are validated automatically on GitHub-hosted Ubuntu runners through the Docker CI workflow.
 
 GitHub Actions CI is implemented and has successfully completed its initial run.
 
@@ -298,21 +316,34 @@ docker compose down
 
 The named database volume is retained by default. Avoid using `docker compose down -v` if you want to preserve the database.
 
-**Validation status:** Docker configuration has been reviewed, but the container has not yet been built and tested in a Docker runtime.
+**Validation status:** Docker CI successfully builds the image, starts the API, verifies the health endpoint and Alembic migrations, and confirms SQLite persistence after a container restart.
 
 ## Continuous Integration
 
-GitHub Actions runs the backend CI workflow on pushes and pull requests targeting `main`.
+GitHub Actions runs two independent workflows on pushes and pull requests targeting `main`.
 
-The pipeline:
+### Backend CI
 
 - Sets up Python 3.14 on Ubuntu
-- Installs the project dependencies
+- Installs project dependencies
 - Validates Python syntax
-- Applies Alembic database migrations
+- Applies Alembic migrations
 - Runs automated pytest tests
 
-The initial GitHub Actions execution completed successfully.
+### Docker CI
+
+- Builds the application Docker image
+- Starts the API through Docker Compose
+- Checks the `/health` endpoint
+- Verifies the Alembic migration in SQLite
+- Writes a persistence marker to the database
+- Restarts the API container
+- Confirms that the marker survives the restart
+- Collects logs on failure and cleans up test resources
+
+Both workflows passed on commit `7c21cb8`.
+
+These checks run on GitHub-hosted Ubuntu runners; Docker does not need to be installed on the developer's Windows machine.
 
 ## Author
 
