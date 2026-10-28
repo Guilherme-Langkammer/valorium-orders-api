@@ -1,5 +1,7 @@
 # Valorium Orders API
 
+[![Backend CI](https://github.com/Guilherme-Langkammer/valorium-orders-api/actions/workflows/tests.yml/badge.svg)](https://github.com/Guilherme-Langkammer/valorium-orders-api/actions/workflows/tests.yml)
+
 A RESTful order management API built with Python, FastAPI, SQLAlchemy, and Alembic.
 
 This is an independent, public backend engineering portfolio project demonstrating API design, relational data modeling, request validation, database migrations, business rules, and automated testing.
@@ -161,7 +163,7 @@ git clone https://github.com/Guilherme-Langkammer/valorium-orders-api.git
 cd valorium-orders-api
 ```
 
-The clone URL above is the intended repository address; the remote repository must be created before it can be used.
+This repository is publicly available on GitHub.
 
 ### 2. Create a virtual environment
 
@@ -267,7 +269,50 @@ This is a portfolio project under active development.
 
 Current functionality focuses on order management, database migrations, and automated testing.
 
-Authentication, authorization, containerization, CI/CD, and production deployment are not implemented in the current version.
+Authentication, authorization, and production deployment are not implemented in the current version.
+
+Dockerfile and Docker Compose configurations are included, but a complete container runtime validation is still pending.
+
+GitHub Actions CI is implemented and has successfully completed its initial run.
+
+
+## Docker
+
+The project includes a Dockerfile and Docker Compose configuration.
+
+The container runs the API as a non-root user. Docker Compose applies Alembic migrations before starting Uvicorn and uses a named volume to persist the SQLite database.
+
+Start the application:
+
+```bash
+docker compose up --build -d
+```
+
+Open the API documentation at http://127.0.0.1:8000/docs.
+
+Stop the containers:
+
+```bash
+docker compose down
+```
+
+The named database volume is retained by default. Avoid using `docker compose down -v` if you want to preserve the database.
+
+**Validation status:** Docker configuration has been reviewed, but the container has not yet been built and tested in a Docker runtime.
+
+## Continuous Integration
+
+GitHub Actions runs the backend CI workflow on pushes and pull requests targeting `main`.
+
+The pipeline:
+
+- Sets up Python 3.14 on Ubuntu
+- Installs the project dependencies
+- Validates Python syntax
+- Applies Alembic database migrations
+- Runs automated pytest tests
+
+The initial GitHub Actions execution completed successfully.
 
 ## Author
 
