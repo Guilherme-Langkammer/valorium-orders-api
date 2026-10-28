@@ -1,0 +1,49 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python tests and migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      DATABASE_URL: sqlite:///./ci_orders.db
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Validate Python syntax
+        run: |
+          python -m compileall -q app tests main.py
+
+      - name: Apply database migrations
+        run: |
+          python -m alembic upgrade head
+          python -m alembic current
+
+      - name: Run automated tests
+        run: |
+          python -m pytest -q
