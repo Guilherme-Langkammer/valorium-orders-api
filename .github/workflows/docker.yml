@@ -1,0 +1,85 @@
+name: Docker CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: Build and smoke test Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build Docker image
+        run: docker compose build
+
+      - name: Start API and apply migrations
+        run: docker compose up -d
+
+      - name: Check API health
+        run: |
+          set -euo pipefail
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:8000/health; then
+              echo
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" -eq 1
+          echo "API health check passed"
+
+      - name: Verify database migration
+        run: |
+          set -euo pipefail
+          docker compose exec -T api python -m alembic current
+          docker compose exec -T api python -c \
+            "import sqlite3; c=sqlite3.connect('/data/orders.db'); assert c.execute('SELECT COUNT(*) FROM alembic_version').fetchone()[0] == 1; print('Migration verified')"
+
+      - name: Write persistence marker
+        run: |
+          set -euo pipefail
+          docker compose exec -T api python -c \
+            "import sqlite3; c=sqlite3.connect('/data/orders.db'); c.execute('CREATE TABLE IF NOT EXISTS ci_persistence (value TEXT NOT NULL)'); c.execute('INSERT INTO ci_persistence (value) VALUES (?)', ('valorium-docker-ci',)); c.commit(); print('Persistence marker written')"
+
+      - name: Restart API container
+        run: docker compose restart api
+
+      - name: Verify persistence after restart
+        run: |
+          set -euo pipefail
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent \
+              http://127.0.0.1:8000/health > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" -eq 1
+          docker compose exec -T api python -c \
+            "import sqlite3; c=sqlite3.connect('/data/orders.db'); assert c.execute('SELECT COUNT(*) FROM ci_persistence WHERE value = ?', ('valorium-docker-ci',)).fetchone()[0] == 1; print('Persistence verified')"
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Clean up
+        if: always()
+        run: docker compose down --volumes --remove-orphans
