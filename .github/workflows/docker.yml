@@ -22,6 +22,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Generate temporary JWT secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          echo "JWT_SECRET_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
+
       - name: Build Docker image
         run: docker compose build
 
@@ -50,6 +57,93 @@ jobs:
           docker compose exec -T api python -m alembic current
           docker compose exec -T api python -c \
             "import sqlite3; c=sqlite3.connect('/data/orders.db'); assert c.execute('SELECT COUNT(*) FROM alembic_version').fetchone()[0] == 1; print('Migration verified')"
+
+      - name: Verify JWT authentication over HTTP
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import secrets
+          import urllib.error
+          import urllib.request
+
+          base = "http://127.0.0.1:8000"
+
+          def request(method, path, payload=None, token=None):
+              headers = {"Content-Type": "application/json"}
+              if token:
+                  headers["Authorization"] = "Bearer " + token
+
+              body = None if payload is None else json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(
+                  base + path,
+                  data=body,
+                  headers=headers,
+                  method=method,
+              )
+
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      return response.status, json.load(response)
+              except urllib.error.HTTPError as error:
+                  return error.code, json.loads(error.read().decode("utf-8"))
+
+          status, _ = request("GET", "/api/v1/orders")
+          assert status == 401, f"Unauthenticated orders: {status}"
+
+          email = "docker-ci-" + secrets.token_hex(8) + "@example.test"
+          password = secrets.token_urlsafe(32)
+
+          status, user = request(
+              "POST",
+              "/api/v1/auth/register",
+              {"email": email, "password": password},
+          )
+          assert status == 201, f"Register: {status}"
+          assert user["role"] == "user"
+
+          status, login = request(
+              "POST",
+              "/api/v1/auth/login",
+              {"email": email, "password": password},
+          )
+          assert status == 200, f"Login: {status}"
+          token = login["access_token"]
+          assert login["token_type"] == "bearer"
+
+          status, me = request("GET", "/api/v1/auth/me", token=token)
+          assert status == 200, f"Me: {status}"
+          assert me["email"] == email
+
+          status, order = request(
+              "POST",
+              "/api/v1/orders",
+              {
+                  "customer_name": "Docker CI Customer",
+                  "items": [
+                      {
+                          "product_name": "Test Item",
+                          "quantity": 2,
+                          "unit_price_cents": 500,
+                      }
+                  ],
+              },
+              token=token,
+          )
+          assert status == 201, f"Create order: {status}"
+          assert order["total_cents"] == 1000
+
+          status, _ = request(
+              "PATCH",
+              f"/api/v1/orders/{order['id']}/status",
+              {"status": "confirmed"},
+              token=token,
+          )
+          assert status == 403, f"Non-admin status update: {status}"
+
+          print("JWT HTTP smoke test passed")
+          PY
 
       - name: Write persistence marker
         run: |

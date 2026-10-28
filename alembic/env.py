@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.db.database import Base, DATABASE_URL
 from app.models import order as order_models  # noqa: F401
+from app.models import user as user_models  # noqa: F401
 
 config = context.config
 

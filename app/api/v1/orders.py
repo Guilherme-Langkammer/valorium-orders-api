@@ -1,9 +1,11 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
+from app.api.v1.auth import get_current_user
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.models.order import Order, OrderItem
+from app.models.user import User
 from app.schemas.order import (
     OrderCreate, OrderRead, OrderStatusUpdate
 )
@@ -11,7 +13,17 @@ from app.schemas.order import (
 router = APIRouter(
     prefix="/api/v1/orders",
     tags=["Orders"],
+    dependencies=[Depends(get_current_user)],
 )
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Admin permission required",
+        )
+    return current_user
+
 
 ALLOWED_TRANSITIONS = {
     "pending": {"confirmed", "cancelled"},
@@ -63,6 +75,7 @@ def update_status(
     order_id: int,
     payload: OrderStatusUpdate,
     db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
 ):
     order = db.get(Order, order_id)
     if order is None:

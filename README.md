@@ -12,11 +12,14 @@ This is an independent, public backend engineering portfolio project demonstrati
 - Create orders containing one or more items
 - Automatically calculate order totals using integer cents
 - List orders and retrieve individual orders
-- Manage order status transitions
+- Manage order status transitions with administrator authorization
 - Validate requests using Pydantic
 - Persist orders and items using SQLAlchemy
 - Manage database schema changes with Alembic
 - Run automated tests with pytest
+- Register and authenticate users with JWT bearer tokens
+- Hash passwords with Argon2id
+- Enforce role-based permissions for order status updates
 - Explore the API using interactive OpenAPI documentation
 
 ## Tech Stack
@@ -29,6 +32,9 @@ This is an independent, public backend engineering portfolio project demonstrati
 - SQLite
 - pytest
 - Uvicorn
+- PyJWT
+- argon2-cffi
+- Docker and GitHub Actions
 
 ## Project Structure
 
@@ -40,39 +46,115 @@ valorium-orders-api/
 |-- app/
 |   |-- api/
 |   |   `-- v1/
+|   |       |-- auth.py
 |   |       |-- health.py
 |   |       `-- orders.py
 |   |-- core/
+|   |   `-- security.py
 |   |-- db/
 |   |   `-- database.py
 |   |-- models/
-|   |   `-- order.py
+|   |   |-- order.py
+|   |   `-- user.py
 |   |-- schemas/
+|   |   |-- auth.py
 |   |   `-- order.py
 |   |-- services/
 |   `-- main.py
 |-- tests/
+|   |-- test_auth.py
 |   |-- test_health.py
-|   `-- test_orders.py
+|   |-- test_orders.py
+|   `-- test_security.py
 |-- alembic.ini
 |-- main.py
 |-- pytest.ini
 `-- requirements.txt
 ```
 
-The `core` and `services` directories are reserved for future extensions.
+The `services` directory is reserved for future extensions. The `core` directory contains JWT and password security helpers.
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| GET | `/health` | Check API health |
-| POST | `/api/v1/orders` | Create an order |
-| GET | `/api/v1/orders` | List orders |
-| GET | `/api/v1/orders/{order_id}` | Retrieve an order |
-| PATCH | `/api/v1/orders/{order_id}/status` | Update order status |
+| Method | Endpoint | Access | Description |
+| --- | --- | --- | --- |
+| GET | `/health` | Public | Check API health |
+| POST | `/api/v1/auth/register` | Public | Register a standard user |
+| POST | `/api/v1/auth/login` | Public | Obtain a JWT access token |
+| GET | `/api/v1/auth/me` | Authenticated | Retrieve the current user |
+| POST | `/api/v1/orders` | Authenticated | Create an order |
+| GET | `/api/v1/orders` | Authenticated | List orders |
+| GET | `/api/v1/orders/{order_id}` | Authenticated | Retrieve an order |
+| PATCH | `/api/v1/orders/{order_id}/status` | Admin only | Update order status |
 
 Interactive documentation is available at `/docs`.
+
+## Authentication and Authorization
+
+The API uses Argon2id password hashes and HS256 JWT bearer tokens.
+Access tokens expire after 30 minutes. The signing key is supplied
+through `JWT_SECRET_KEY` and must contain at least 32 UTF-8 bytes.
+
+Public registration always assigns the `user` role. The registration
+endpoint does not accept administrator privileges. There is no public
+administrator provisioning endpoint.
+
+### Register
+
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "developer@example.com",
+  "password": "ExamplePassword123!"
+}
+```
+
+Registration returns HTTP `201`. Passwords must contain 12 to 128
+characters. Duplicate emails return HTTP `409`. Email addresses are
+normalized to lowercase.
+
+### Login
+
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "developer@example.com",
+  "password": "ExamplePassword123!"
+}
+```
+
+A successful login returns an `access_token` and `token_type: bearer`.
+Send the token with protected requests:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+`GET /api/v1/auth/me` returns the authenticated user's public profile,
+including their role and active status, but not their password hash.
+
+### Permissions
+
+- `GET /health`, registration, and login are public.
+- All order endpoints require a valid token belonging to an active user.
+- Authenticated `user` and `admin` accounts can create and read orders.
+- Only `admin` accounts can change order status.
+- Missing or invalid credentials return HTTP `401`.
+- Insufficient permissions return HTTP `403`.
+
+**Current security boundary:** orders are not associated with a user
+or tenant. Any authenticated user can currently read all orders.
+This demonstration is not suitable for multi-tenant production use
+without ownership or tenant isolation, additional security controls,
+and deployment hardening.
 
 ## Order Creation Example
 
@@ -80,6 +162,7 @@ Request:
 
 ```http
 POST /api/v1/orders
+Authorization: Bearer <access_token>
 Content-Type: application/json
 ```
 
@@ -130,6 +213,7 @@ Example:
 
 ```http
 PATCH /api/v1/orders/1/status
+Authorization: Bearer <admin_access_token>
 Content-Type: application/json
 ```
 
@@ -190,7 +274,27 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-### 4. Apply database migrations
+### 4. Configure the JWT signing key
+
+Set a strong secret in your terminal before starting the API.
+Do not commit the secret to Git.
+
+Windows PowerShell:
+
+```powershell
+$env:JWT_SECRET_KEY = & python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Linux or macOS:
+
+```bash
+export JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+```
+
+The generated value is intended for local development. Keep the same
+secret for as long as existing tokens must remain valid.
+
+### 5. Apply database migrations
 
 ```bash
 python -m alembic upgrade head
@@ -200,7 +304,7 @@ The default configuration uses a local SQLite database named `orders.db`.
 
 You can override the database connection through the `DATABASE_URL` environment variable.
 
-### 5. Start the API
+### 6. Start the API
 
 ```bash
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
@@ -248,8 +352,14 @@ The current test suite covers:
 - Negative price validation
 - Valid and invalid status transitions
 - Missing order handling
+- User registration and duplicate email rejection
+- Public registration privilege escalation prevention
+- Login, token validation, and authenticated profile retrieval
+- Inactive user rejection
+- Argon2id hashing and JWT expiration checks
+- Protected order routes and administrator-only status updates
 
-Order tests use an isolated in-memory SQLite database.
+Order and authentication tests use isolated in-memory SQLite databases. The test suite currently contains 29 passing tests.
 
 ## Architecture Overview
 
@@ -258,6 +368,8 @@ flowchart TD
     A[HTTP Client] --> B[FastAPI Application]
     B --> C[API Routes]
     C --> D[Pydantic Schemas]
+    C --> J[JWT Authentication and Role Checks]
+    J --> K[Argon2id and JWT Security]
     C --> E[SQLAlchemy ORM]
     E --> F[(SQLite Database)]
     G[Alembic Migrations] --> F
@@ -276,6 +388,7 @@ The project separates:
 - Request and response contracts in `app/schemas`
 - ORM entities in `app/models`
 - Database configuration in `app/db`
+- Authentication and password security in `app/core/security.py`
 - Application initialization in `app/main.py`
 - Automated tests in `tests`
 
@@ -285,9 +398,9 @@ This structure supports future improvements without coupling HTTP handling direc
 
 This is a portfolio project under active development.
 
-Current functionality focuses on order management, database migrations, and automated testing.
+Current functionality includes order management, database migrations, JWT authentication, basic role-based authorization, Docker packaging, and automated testing.
 
-Authentication, authorization, and production deployment are not implemented in the current version.
+Production deployment and tenant-level order isolation are not implemented. Administrator accounts cannot be created through public registration.
 
 Docker and Docker Compose are validated automatically on GitHub-hosted Ubuntu runners through the Docker CI workflow.
 
@@ -300,9 +413,12 @@ The project includes a Dockerfile and Docker Compose configuration.
 
 The container runs the API as a non-root user. Docker Compose applies Alembic migrations before starting Uvicorn and uses a named volume to persist the SQLite database.
 
-Start the application:
+Before starting Docker Compose, set `JWT_SECRET_KEY` in the shell running Docker Compose. The variable is mandatory; do not store a real secret in the repository.
+
+For example, on Linux or macOS:
 
 ```bash
+export JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
 docker compose up --build -d
 ```
 
@@ -316,7 +432,7 @@ docker compose down
 
 The named database volume is retained by default. Avoid using `docker compose down -v` if you want to preserve the database.
 
-**Validation status:** Docker CI successfully builds the image, starts the API, verifies the health endpoint and Alembic migrations, and confirms SQLite persistence after a container restart.
+**Validation:** Docker CI builds the image, starts the API, checks health and migrations, tests JWT authentication over HTTP, and verifies SQLite persistence after a container restart. The updated workflow must pass on GitHub Actions before it is considered verified.
 
 ## Continuous Integration
 
@@ -335,13 +451,15 @@ GitHub Actions runs two independent workflows on pushes and pull requests target
 - Builds the application Docker image
 - Starts the API through Docker Compose
 - Checks the `/health` endpoint
+- Generates a temporary JWT signing secret for each CI run
+- Exercises JWT authentication over HTTP
 - Verifies the Alembic migration in SQLite
 - Writes a persistence marker to the database
 - Restarts the API container
 - Confirms that the marker survives the restart
 - Collects logs on failure and cleans up test resources
 
-Both workflows passed on commit `7c21cb8`.
+Earlier versions of both workflows passed on GitHub Actions. The updated JWT-enabled Docker workflow is pending a new CI run.
 
 These checks run on GitHub-hosted Ubuntu runners; Docker does not need to be installed on the developer's Windows machine.
 
